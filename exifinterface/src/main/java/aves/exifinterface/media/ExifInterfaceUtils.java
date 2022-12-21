@@ -14,7 +14,7 @@
  * limitations under the License.
  */
 
-package androidx.exifinterface.media;
+package aves.exifinterface.media;
 
 import android.media.MediaDataSource;
 import android.media.MediaMetadataRetriever;

@@ -3,7 +3,7 @@ plugins {
 }
 
 android {
-    namespace 'androidx.exifinterface'
+    namespace 'aves.exifinterface'
     compileSdk 33
 
     defaultConfig {
