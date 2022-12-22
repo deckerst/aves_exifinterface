@@ -59,6 +59,7 @@ import java.lang.annotation.RetentionPolicy;
 import java.nio.ByteBuffer;
 import java.nio.ByteOrder;
 import java.nio.charset.Charset;
+import java.nio.charset.StandardCharsets;
 import java.text.ParsePosition;
 import java.text.SimpleDateFormat;
 import java.util.Arrays;
@@ -3067,6 +3068,10 @@ public class ExifInterface {
             0x41, 0x53, 0x43, 0x49, 0x49, 0x0, 0x0, 0x0
     };
 
+    private static final byte[] EXIF_UNICODE_PREFIX = new byte[] {
+            0x55, 0x4E, 0x49, 0x43, 0x4F, 0x44, 0x45, 0x00
+    };
+
     // A class for indicating EXIF rational type.
     private static class Rational {
         public final long numerator;
@@ -3175,6 +3180,25 @@ public class ExifInterface {
             return new ExifAttribute(IFD_FORMAT_STRING, ascii.length, ascii);
         }
 
+        private static Charset getUnicodeCharset(int mimeType) {
+            switch (mimeType) {
+                case IMAGE_TYPE_WEBP:
+                    return UNICODE_LITTLE_ENDIAN;
+                case IMAGE_TYPE_JPEG:
+                case IMAGE_TYPE_PNG:
+                default:
+                    return UNICODE_BIG_ENDIAN;
+            }
+        }
+
+        private static ExifAttribute createUnicodeString(int mimeType,String value) {
+            final byte[] valueBytes = value.getBytes(getUnicodeCharset(mimeType));
+            byte[] commentBytes = new byte[EXIF_UNICODE_PREFIX.length + valueBytes.length];
+            System.arraycopy(EXIF_UNICODE_PREFIX, 0, commentBytes, 0, EXIF_UNICODE_PREFIX.length);
+            System.arraycopy(valueBytes, 0, commentBytes, EXIF_UNICODE_PREFIX.length, valueBytes.length);
+            return new ExifAttribute(IFD_FORMAT_UNDEFINED, commentBytes.length, commentBytes);
+        }
+
         public static ExifAttribute createURational(Rational[] values, ByteOrder byteOrder) {
             final ByteBuffer buffer = ByteBuffer.wrap(
                     new byte[IFD_FORMAT_BYTES_PER_FORMAT[IFD_FORMAT_URATIONAL] * values.length]);
@@ -3215,6 +3239,26 @@ public class ExifInterface {
         @Override
         public String toString() {
             return "(" + IFD_FORMAT_NAMES[format] + ", data length:" + bytes.length + ")";
+        }
+
+        String getUnicodeString(int mimeType, ByteOrder byteOrder) {
+            //try Unicode
+            if (numberOfComponents >= EXIF_UNICODE_PREFIX.length) {
+                boolean isUnicode = true;
+                for (int i = 0; i < EXIF_UNICODE_PREFIX.length; ++i) {
+                    if (bytes[i] != EXIF_UNICODE_PREFIX[i]) {
+                        isUnicode = false;
+                        break;
+                    }
+                }
+                if (isUnicode) {
+                    byte[] commentBytes = new byte[bytes.length - EXIF_UNICODE_PREFIX.length];
+                    System.arraycopy(bytes, EXIF_UNICODE_PREFIX.length, commentBytes, 0, commentBytes.length);
+                    return new String(commentBytes, getUnicodeCharset(mimeType));
+                }
+            }
+            //otherwise ASCII
+            return getStringValue(byteOrder);
         }
 
         @SuppressWarnings("WeakerAccess") /* synthetic access */
@@ -3799,7 +3843,9 @@ public class ExifInterface {
     // not only getting information from EXIF but also from some JPEG special segments such as
     // MARKER_COM for user comment and MARKER_SOFx for image width and height.
     @SuppressWarnings("WeakerAccess") /* synthetic access */
-    static final Charset ASCII = Charset.forName("US-ASCII");
+    static final Charset ASCII = StandardCharsets.US_ASCII;
+    static final Charset UNICODE_BIG_ENDIAN = StandardCharsets.UTF_16BE;
+    static final Charset UNICODE_LITTLE_ENDIAN = StandardCharsets.UTF_16LE;
     // Identifier for EXIF APP1 segment in JPEG
     static final byte[] IDENTIFIER_EXIF_APP1 = "Exif\0\0".getBytes(ASCII);
     // Identifier for XMP APP1 segment in JPEG
@@ -4112,6 +4158,9 @@ public class ExifInterface {
         }
         ExifAttribute attribute = getExifAttribute(tag);
         if (attribute != null) {
+            if (tag.equals(TAG_USER_COMMENT)) {
+                return attribute.getUnicodeString(mMimeType, mExifByteOrder);
+            }
             if (!sTagSetForCompatibility.contains(tag)) {
                 return attribute.getStringValue(mExifByteOrder);
             }
@@ -4291,7 +4340,11 @@ public class ExifInterface {
                     }
                     case IFD_FORMAT_UNDEFINED:
                     case IFD_FORMAT_STRING: {
-                        mAttributes[i].put(tag, ExifAttribute.createString(value));
+                        if (tag.equals(TAG_USER_COMMENT)) {
+                            mAttributes[i].put(tag, ExifAttribute.createUnicodeString(mMimeType, value));
+                        } else {
+                            mAttributes[i].put(tag, ExifAttribute.createString(value));
+                        }
                         break;
                     }
                     case IFD_FORMAT_USHORT: {
